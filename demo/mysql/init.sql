@@ -1,0 +1,34 @@
+USE shop;
+
+CREATE TABLE products (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  price DECIMAL(10,2) NOT NULL,
+  stock INT NOT NULL
+);
+
+CREATE TABLE orders (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL,
+  product_id INT NOT NULL,
+  qty INT NOT NULL,
+  amount DECIMAL(10,2) NULL,
+  status VARCHAR(20) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_orders_user (user_id)
+);
+
+CREATE TABLE payments (
+  id BIGINT AUTO_INCREMENT PRIMARY KEY,
+  order_ref BIGINT NOT NULL,
+  amount DECIMAL(10,2) NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO products (name, price, stock)
+SELECT CONCAT('Product ', n), ROUND(5 + n * 1.5, 2), 100000000
+FROM (
+  WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 20)
+  SELECT n FROM seq
+) t;

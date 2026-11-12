@@ -1,0 +1,19 @@
+groups:
+  - name: rca-demo
+    rules:
+      - alert: CheckoutLatencyHigh
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(http_request_duration_seconds_bucket{service="gateway",path="/checkout"}[1m]))
+          ) > 0.5
+        for: 20s
+        labels: {severity: page, service: gateway}
+        annotations: {summary: "checkout p95 latency high"}
+
+      - alert: CheckoutErrorRateHigh
+        expr: |
+          sum(rate(http_requests_total{service="gateway",path="/checkout",status=~"5.."}[1m]))
+            / sum(rate(http_requests_total{service="gateway",path="/checkout"}[1m])) > 0.1
+        for: 20s
+        labels: {severity: page, service: gateway}
+        annotations: {summary: "checkout error rate high"}

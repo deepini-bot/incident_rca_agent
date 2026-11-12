@@ -1,0 +1,132 @@
+name: rca-demo
+
+x-app: &app
+  restart: unless-stopped
+  mem_limit: 512m
+  labels:
+    rca.logs: "true"
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+    interval: 5s
+    timeout: 3s
+    retries: 10
+    start_period: 10s
+
+x-db-env: &db-env
+  DATABASE_URL: mysql+pymysql://app:app@mysql:3306/shop
+  OTLP_ENDPOINT: http://tempo:4318/v1/traces
+
+services:
+  # ---------------- application services ----------------
+  gateway:
+    <<: *app
+    build: {context: ./services, args: {SERVICE: gateway}}
+    environment:
+      OTLP_ENDPOINT: http://tempo:4318/v1/traces
+      DOWNSTREAM_TIMEOUT_S: "5"
+    ports: ["8000:8000"]
+    depends_on:
+      orders: {condition: service_healthy}
+
+  orders:
+    <<: *app
+    build: {context: ./services, args: {SERVICE: orders}}
+    environment:
+      <<: *db-env
+      DOWNSTREAM_TIMEOUT_S: "2"
+    ports: ["8001:8000"]
+    depends_on:
+      mysql: {condition: service_healthy}
+      payments: {condition: service_healthy}
+      inventory: {condition: service_healthy}
+
+  payments:
+    <<: *app
+    build: {context: ./services, args: {SERVICE: payments}}
+    environment:
+      <<: *db-env
+    ports: ["8002:8000"]
+    depends_on:
+      mysql: {condition: service_healthy}
+
+  inventory:
+    <<: *app
+    build: {context: ./services, args: {SERVICE: inventory}}
+    environment:
+      <<: *db-env
+    ports: ["8003:8000"]
+    depends_on:
+      mysql: {condition: service_healthy}
+
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    command: ["--max-connections=200"]
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: shop
+      MYSQL_USER: app
+      MYSQL_PASSWORD: app
+    volumes:
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+
+  # ---------------- traffic ----------------
+  loadgen:
+    image: locustio/locust:2.31.8
+    restart: unless-stopped
+    volumes: ["./loadgen:/mnt/locust:ro"]
+    command: >
+      -f /mnt/locust/locustfile.py --host http://gateway:8000
+      --headless -u ${LOAD_USERS:-10} -r 5
+    depends_on:
+      gateway: {condition: service_healthy}
+
+  # ---------------- observability ----------------
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=2d
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/rules.yml:/etc/prometheus/rules.yml:ro
+    ports: ["9090:9090"]
+
+  loki:
+    image: grafana/loki:3.2.0
+    command: ["-config.file=/etc/loki/loki.yml"]
+    volumes: ["./observability/loki.yml:/etc/loki/loki.yml:ro"]
+    ports: ["3100:3100"]
+
+  promtail:
+    image: grafana/promtail:3.2.0
+    command: ["-config.file=/etc/promtail/promtail.yml"]
+    volumes:
+      - ./observability/promtail.yml:/etc/promtail/promtail.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on: [loki]
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    user: root
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes: ["./observability/tempo.yml:/etc/tempo.yaml:ro"]
+    ports: ["3200:3200"]
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["3000:3000"]
+    depends_on: [prometheus, loki, tempo]
